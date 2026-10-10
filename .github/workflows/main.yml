@@ -1,0 +1,91 @@
+name: RDP Gaming Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360  # Maximum standard sur GitHub (6 heures)
+
+    steps:
+      - name: Configure Core RDP Settings & Performance
+        run: |
+          # Activer le Bureau à distance et baisser la sécurité pour la connexion
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          # Configurer le pare-feu
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          # Optimisations visuelles pour gagner un peu de fluidité
+          Set-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name "SystemResponsiveness" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name "GPU Priority" -Value 8 -Force
+          Set-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name "Priority" -Value 6 -Force
+          Set-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name "Scheduling Category" -Value "High" -Force
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create Gaming User
+        run: |
+          $password = "GamingP@ss123!" # Mot de passe fixe ou généré sécurisé
+          $securePass = ConvertTo-SecureString$password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile$installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-gaming-$env:GITHUB_RUN_ID$tsIP = $null$retries = 0
+          while (-not $tsIP -and$retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: (Optional) Install Parsec for better streaming
+        run: |
+          Write-Host "Téléchargement de Parsec pour un meilleur streaming..."
+          $parsecUrl = "https://builds.parsec.app/package/parsec-windows.exe"
+          $installerPath = "$env:TEMP\parsec.exe"
+          try {
+              Invoke-WebRequest -Uri $parsecUrl -OutFile$installerPath
+              Start-Process -FilePath $installerPath -ArgumentList "/silent" -Wait
+              Write-Host "Parsec installé avec succès !"
+          } catch {
+              Write-Warning "Impossible d'installer Parsec, utilisation du RDP classique."
+          }
+
+      - name: Display Connection Info
+        run: |
+          Write-Host "`n=== INFORMATIONS DE CONNEXION GAMING ==="
+          Write-Host "Adresse IP Tailscale : $env:TAILSCALE_IP"
+          Write-Host "Nom d'utilisateur : RDP"
+          Write-Host "Mot de passe : GamingP@ss123!"
+          Write-Host "=========================================`n"
+
+      - name: Maintain Connection
+        run: |
+          while ($true) {
+              Write-Host "[$(Get-Date)] Session active..."
+              Start-Sleep -Seconds 300
+          }
+          
